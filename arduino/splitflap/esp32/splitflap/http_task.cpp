@@ -319,60 +319,62 @@ void HTTPTask::run() {
 
         long now = millis();
 
-        bool update = false;
-        if (http_last_request_time_ == 0 || now - http_last_request_time_ > REQUEST_INTERVAL_MILLIS) {
-            if (fetchData()) {
-                http_last_success_time_ = millis();
-                stale = false;
-                update = true;
-            }
-            http_last_request_time_ = millis();
-        }
-
-        if (!stale && http_last_success_time_ > 0 && millis() - http_last_success_time_ > STALE_TIME_MILLIS) {
-            stale = true;
-            messages_.clear();
-            messages_.push_back("stale");
-            update = true;
-        }
-
-        // if (update || now - last_message_change_time_ > MESSAGE_CYCLE_INTERVAL_MILLIS) {
-        //     if (current_message_index_ >= messages_.size()) {
-        //         current_message_index_ = 0;
+        // bool update = false;
+        // if (http_last_request_time_ == 0 || now - http_last_request_time_ > REQUEST_INTERVAL_MILLIS) {
+        //     if (fetchData()) {
+        //         http_last_success_time_ = millis();
+        //         stale = false;
+        //         update = true;
         //     }
-
-        //     if (messages_.size() > 0) {
-        //         String message = messages_[current_message_index_].c_str();
-
-        //         snprintf(buf, sizeof(buf), "Cycling to next message: %s", message.c_str());
-        //         logger_.log(buf);
-
-        //         // Pad message for display
-        //         size_t len = strlcpy(buf, message.c_str(), sizeof(buf));
-        //         memset(buf + len, ' ', sizeof(buf) - len);
-
-        //         // splitflap_task_.showString(buf, NUM_MODULES, false);
-        //     }
-
-        //     current_message_index_++;
-        //     last_message_change_time_ = millis();
+        //     http_last_request_time_ = millis();
         // }
+
+        // if (!stale && http_last_success_time_ > 0 && millis() - http_last_success_time_ > STALE_TIME_MILLIS) {
+        //     stale = true;
+        //     messages_.clear();
+        //     messages_.push_back("stale");
+        //     update = true;
+        // }
+
+        // Loop through messages if it exists every time we hit the interval
+        if (update || now - last_message_change_time_ > MESSAGE_CYCLE_INTERVAL_MILLIS) {
+            if (current_message_index_ >= messages_.size()) {
+                current_message_index_ = 0;
+            }
+
+            if (messages_.size() > 0) {
+                String message = messages_[current_message_index_].c_str();
+
+                snprintf(buf, sizeof(buf), "Cycling to next message: %s", message.c_str());
+                logger_.log(buf);
+
+                // Pad message for display
+                size_t len = strlcpy(buf, message.c_str(), sizeof(buf));
+                memset(buf + len, ' ', sizeof(buf) - len);
+
+                // splitflap_task_.showString(buf, NUM_MODULES, false);
+            }
+
+            current_message_index_++;
+            last_message_change_time_ = millis();
+        }
 
         time_t tNow;
         char curTime[NUM_MODULES + 3] = {0};
         time(&tNow);
-        strftime(curTime, sizeof(curTime), "11111", localtime(&tNow));
+        strftime(curTime, sizeof(curTime), "t%H%M", localtime(&tNow));
         logger_.log(buf);
 
-        if (curTime != m_lastSeenTime.c_str())
+        if (localtime(&tNow)->tm_hour >= 21 || localtime(&tNow)->tm_hour <= 8)
+        {
+            splitflap_task_.showString("night", NUM_MODULES, false);
+        }
+        else if (curTime != m_lastSeenTime.c_str())
         {
             snprintf(buf, sizeof(buf), "Cycling to next message: %s", curTime);
             logger_.log(buf);
-            size_t len = strlcpy(buf, curTime, sizeof(buf));
-            // Pad message for display
-            memset(buf, 'X', sizeof(buf);
-            logger_.log(buf);
-            splitflap_task_.showString(buf, NUM_MODULES, false);
+            
+            splitflap_task_.showString(curTime, NUM_MODULES, false);
             m_lastSeenTime = curTime;
         }
 
