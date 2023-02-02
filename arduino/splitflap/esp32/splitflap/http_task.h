@@ -49,5 +49,6 @@ class HTTPTask : public Task<HTTPTask> {
         std::vector<String> messages_ = {};
         uint8_t current_message_index_ = 0;
         uint32_t last_message_change_time_ = 0;
+        String m_lastSeenTime;
 
 };

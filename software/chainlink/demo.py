@@ -1,5 +1,6 @@
 import random
 import time
+from datetime import datetime
 
 from splitflap_proto import (
     ask_for_serial_port,
@@ -7,10 +8,7 @@ from splitflap_proto import (
 )
 
 words = [
-    'alpaca', 'baboon', 'badger', 'beluga', 'bobcat', 'ferret',
-    'gopher', 'impala', 'jackal', 'jaguar', 'kitten', 'marmot',
-    'monkey', 'ocelot', 'rabbit', 'racoon', 'turtle', 'walrus',
-    'weasel', 'wombat',
+    '    ', 'ty  ', ' ler', 'is  ', 'bad ', 'at  ', 'sma ', '  sh'
 ]
 
 
@@ -21,10 +19,17 @@ def _run():
         alphabet = s.get_alphabet()
 
         # Show a random word every 10 seconds
+        now = datetime.now()
+
+        print_time = now.strftime("%H%M")
         while True:
-            word = random.choice(words)
-            s.set_text(word)
-            time.sleep(10)
+            now = datetime.now()
+
+            current_time = now.strftime("%H%M")
+            if current_time != print_time:
+                print_time = current_time
+                s.set_text(print_time)
+            time.sleep(1)
 
 
 if __name__ == '__main__':

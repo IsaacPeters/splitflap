@@ -20,6 +20,7 @@
 #include <lwip/apps/sntp.h>
 #include <json11.hpp>
 #include <time.h>
+#include <ArduinoOTA.h>
 
 #include "secrets.h"
 
@@ -41,6 +42,7 @@ using namespace json11;
 
 // Cycle the message that's showing more frequently, every 30 seconds (exaggerated for example purposes)
 #define MESSAGE_CYCLE_INTERVAL_MILLIS (30 * 1000)
+#define MESSAGE_DURATION (5 * 1000)
 
 // Don't show stale data if it's been too long since successful data load
 #define STALE_TIME_MILLIS (REQUEST_INTERVAL_MILLIS * 3)
@@ -51,13 +53,17 @@ using namespace json11;
 // Timezone for local time strings; this is America/Los_Angeles. See https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
 #define TIMEZONE "PST8PDT,M3.2.0,M11.1.0"
 
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 0;
+const int   daylightOffset_sec = 3600;
+
 bool HTTPTask::fetchData() {
     char buf[200];
     uint32_t start = millis();
     HTTPClient http;
 
     // Construct the http request
-    http.begin("https://api.synopticdata.com/v2/stations/latest?&token=" SYNOPTICDATA_TOKEN "&within=30&units=english&vars=air_temp,wind_speed&varsoperator=and&radius=37.765157,-122.419702,4&limit=20&fields=stid");
+    http.begin("https://api.synopticdata.com/v2/stations/latest?&token=" SYNOPTICDATA_TOKEN "&within=30&units=english&vars=air_temp,wind_speed&varsoperator=and&radius=45.5061697,-122.6235114,4&limit=20&fields=stid");
 
     // If you wanted to add headers, you would do so like this:
     // http.addHeader("Accept", "application/json");
@@ -212,7 +218,7 @@ bool HTTPTask::handleData(Json json) {
     snprintf(buf, sizeof(buf), "%d f", (int)median_temp);
     messages_.push_back(String(buf));
 
-    snprintf(buf, sizeof(buf), "%d mph", (int)(median_wind_speed * 1.151));
+    snprintf(buf, sizeof(buf), "%dmph", (int)(median_wind_speed * 1.151));
     messages_.push_back(String(buf));
 
     // Show the data fetch time on the LCD
@@ -265,6 +271,40 @@ void HTTPTask::connectWifi() {
     tzset();
     strftime(buf, sizeof(buf), "Got time: %Y-%m-%d %H:%M:%S", localtime(&now));
     logger_.log(buf);
+
+    // OTA Config
+    // ArduinoOTA.setPort(8266);
+
+    ArduinoOTA
+    .onStart([]() {
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH)
+            type = "sketch";
+        else // U_SPIFFS
+            type = "filesystem";
+
+        // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+        Serial.println("Start updating " + type);
+        })
+        .onEnd([]() {
+        Serial.println("\nEnd");
+        })
+        .onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+        })
+        .onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+
+    ArduinoOTA.begin();
+    
+    logger_.log(WiFi.localIP().toString().c_str());
+    logger_.log("Done with WiFi..");
 }
 
 void HTTPTask::run() {
@@ -274,6 +314,9 @@ void HTTPTask::run() {
 
     bool stale = false;
     while(1) {
+        // Handle OTA update
+        ArduinoOTA.handle();
+
         long now = millis();
 
         bool update = false;
@@ -293,26 +336,44 @@ void HTTPTask::run() {
             update = true;
         }
 
-        if (update || now - last_message_change_time_ > MESSAGE_CYCLE_INTERVAL_MILLIS) {
-            if (current_message_index_ >= messages_.size()) {
-                current_message_index_ = 0;
-            }
+        // if (update || now - last_message_change_time_ > MESSAGE_CYCLE_INTERVAL_MILLIS) {
+        //     if (current_message_index_ >= messages_.size()) {
+        //         current_message_index_ = 0;
+        //     }
 
-            if (messages_.size() > 0) {
-                String message = messages_[current_message_index_].c_str();
+        //     if (messages_.size() > 0) {
+        //         String message = messages_[current_message_index_].c_str();
 
-                snprintf(buf, sizeof(buf), "Cycling to next message: %s", message.c_str());
-                logger_.log(buf);
+        //         snprintf(buf, sizeof(buf), "Cycling to next message: %s", message.c_str());
+        //         logger_.log(buf);
 
-                // Pad message for display
-                size_t len = strlcpy(buf, message.c_str(), sizeof(buf));
-                memset(buf + len, ' ', sizeof(buf) - len);
+        //         // Pad message for display
+        //         size_t len = strlcpy(buf, message.c_str(), sizeof(buf));
+        //         memset(buf + len, ' ', sizeof(buf) - len);
 
-                splitflap_task_.showString(buf, NUM_MODULES, false);
-            }
+        //         // splitflap_task_.showString(buf, NUM_MODULES, false);
+        //     }
 
-            current_message_index_++;
-            last_message_change_time_ = millis();
+        //     current_message_index_++;
+        //     last_message_change_time_ = millis();
+        // }
+
+        time_t tNow;
+        char curTime[NUM_MODULES + 3] = {0};
+        time(&tNow);
+        strftime(curTime, sizeof(curTime), "11111", localtime(&tNow));
+        logger_.log(buf);
+
+        if (curTime != m_lastSeenTime.c_str())
+        {
+            snprintf(buf, sizeof(buf), "Cycling to next message: %s", curTime);
+            logger_.log(buf);
+            size_t len = strlcpy(buf, curTime, sizeof(buf));
+            // Pad message for display
+            memset(buf, 'X', sizeof(buf);
+            logger_.log(buf);
+            splitflap_task_.showString(buf, NUM_MODULES, false);
+            m_lastSeenTime = curTime;
         }
 
         String wifi_status;

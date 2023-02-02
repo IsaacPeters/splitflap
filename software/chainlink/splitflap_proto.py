@@ -351,7 +351,7 @@ def _run_example():
         while True:
             text = input()[:modules]
 
-            s.set_text(text, Splitflap.ForceMovement.ALL)
+            s.set_text(text, Splitflap.ForceMovement.NONE)
 
 
 if __name__ == '__main__':
