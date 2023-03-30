@@ -13,6 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
+#define HTTP true
 #if HTTP
 #include "http_task.h"
 
@@ -41,7 +42,7 @@ using namespace json11;
 #define REQUEST_INTERVAL_MILLIS (10 * 60 * 1000)
 
 // Cycle the message that's showing more frequently, every 30 seconds (exaggerated for example purposes)
-#define MESSAGE_CYCLE_INTERVAL_MILLIS (30 * 1000)
+#define MESSAGE_CYCLE_INTERVAL_MILLIS (5 * 1000)
 #define MESSAGE_DURATION (5 * 1000)
 
 // Don't show stale data if it's been too long since successful data load
@@ -213,19 +214,81 @@ bool HTTPTask::handleData(Json json) {
     logger_.log(buf);
 
     // Construct the messages to display
-    messages_.clear();
+    messages_.empty();
 
     snprintf(buf, sizeof(buf), "%d f", (int)median_temp);
-    messages_.push_back(String(buf));
+    messages_.push(String(buf));
 
     snprintf(buf, sizeof(buf), "%dmph", (int)(median_wind_speed * 1.151));
-    messages_.push_back(String(buf));
+    messages_.push(String(buf));
 
     // Show the data fetch time on the LCD
     time_t now;
     time(&now);
     strftime(buf, sizeof(buf), "Data: %Y-%m-%d %H:%M:%S", localtime(&now));
     display_task_.setMessage(0, String(buf));
+    return true;
+}
+
+bool HTTPTask::addStockPriceToMessages(String symbol) {
+    HTTPClient http;
+
+    http.begin("https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=" + symbol + "&apikey=" + ALPHAVANTAGE_TOKEN);
+    symbol.toLowerCase();
+    messages_.push(symbol);
+    int httpCode = http.GET();
+
+    if (httpCode > 0) {
+        String payload = http.getString();
+        // int index1 = payload.indexOf("\"05. price\": ") + 13;
+        // int index2 = payload.indexOf("}");
+        // String price = payload.substring(index1, index2 - 1);
+        // price.trim();
+        // float priceNum = price.toFloat();
+
+        std::string err;
+        Json json = Json::parse(payload.c_str(), err);
+
+        if (!err.empty()) {
+            char buf[200];
+            snprintf(buf, sizeof(buf), "Error parsing response! %s", err.c_str());
+            logger_.log(buf);
+            return false;
+        }
+
+        auto quote = json["Global Quote"];
+        if (!quote.is_object()) {
+            logger_.log("Parse error: [Global Quote]");
+            return false;
+        }
+        auto queryPrice = quote["05. price"];
+        if (!queryPrice.is_string()) {
+            logger_.log("Parse error: [05. price]");
+            return false;
+        }
+        String price = queryPrice.string_value().c_str();
+        price.trim();
+        double priceNum = price.toFloat();
+
+        char strPrice[6] = " big ";
+        if (priceNum < 100)
+        {
+            dtostrf(priceNum, 5, 2, strPrice);
+        }
+        else if (priceNum < 1000)
+        {
+            dtostrf(priceNum, 5, 1, strPrice);
+        }
+        else if (priceNum < 100000)
+        {
+            dtostrf(priceNum, 5, 0, strPrice);
+        }
+        messages_.push(strPrice);
+    } else {
+        logger_.log("Error getting stock price");
+    }
+
+    http.end();
     return true;
 }
 
@@ -305,6 +368,12 @@ void HTTPTask::connectWifi() {
     
     logger_.log(WiFi.localIP().toString().c_str());
     logger_.log("Done with WiFi..");
+    
+    splitflap_task_.showString("hi...", NUM_MODULES, false);
+
+    addStockPriceToMessages("AMZN");
+
+    last_message_change_time_ = millis();
 }
 
 void HTTPTask::run() {
@@ -312,70 +381,118 @@ void HTTPTask::run() {
 
     connectWifi();
 
-    bool stale = false;
+    uint32_t intraMinuteDuplicationProtection = 0;
     while(1) {
         // Handle OTA update
         ArduinoOTA.handle();
 
         long now = millis();
-
-        // bool update = false;
-        // if (http_last_request_time_ == 0 || now - http_last_request_time_ > REQUEST_INTERVAL_MILLIS) {
-        //     if (fetchData()) {
-        //         http_last_success_time_ = millis();
-        //         stale = false;
-        //         update = true;
-        //     }
-        //     http_last_request_time_ = millis();
-        // }
-
-        // if (!stale && http_last_success_time_ > 0 && millis() - http_last_success_time_ > STALE_TIME_MILLIS) {
-        //     stale = true;
-        //     messages_.clear();
-        //     messages_.push_back("stale");
-        //     update = true;
-        // }
-
-        // Loop through messages if it exists every time we hit the interval
-        if (update || now - last_message_change_time_ > MESSAGE_CYCLE_INTERVAL_MILLIS) {
-            if (current_message_index_ >= messages_.size()) {
-                current_message_index_ = 0;
-            }
-
-            if (messages_.size() > 0) {
-                String message = messages_[current_message_index_].c_str();
-
-                snprintf(buf, sizeof(buf), "Cycling to next message: %s", message.c_str());
-                logger_.log(buf);
-
-                // Pad message for display
-                size_t len = strlcpy(buf, message.c_str(), sizeof(buf));
-                memset(buf + len, ' ', sizeof(buf) - len);
-
-                // splitflap_task_.showString(buf, NUM_MODULES, false);
-            }
-
-            current_message_index_++;
-            last_message_change_time_ = millis();
-        }
-
         time_t tNow;
-        char curTime[NUM_MODULES + 3] = {0};
         time(&tNow);
-        strftime(curTime, sizeof(curTime), "t%H%M", localtime(&tNow));
-        logger_.log(buf);
-
-        if (localtime(&tNow)->tm_hour >= 21 || localtime(&tNow)->tm_hour <= 8)
+        // override; night should be unchanging from 9pm to 9am
+        if (localtime(&tNow)->tm_hour == 21 && localtime(&tNow)->tm_min == 0)
         {
             splitflap_task_.showString("night", NUM_MODULES, false);
+            splitflap_task_.disableAll();
+            delay(60000);
+            continue;
         }
-        else if (curTime != m_lastSeenTime.c_str())
+        else if (localtime(&tNow)->tm_hour >= 21 || localtime(&tNow)->tm_hour <= 8)
         {
-            snprintf(buf, sizeof(buf), "Cycling to next message: %s", curTime);
+            // Night should have gotten displayed, now do nothing.
+            delay(10000);
+            continue;
+        }
+
+        if (now - intraMinuteDuplicationProtection > 60000) {
+            if (localtime(&tNow)->tm_hour == 9 && localtime(&tNow)->tm_min == 0)
+            {
+                splitflap_task_.resetAll();
+                messages_.push("wakey");
+                messages_.push("wakey");
+                messages_.push("eggsn");
+                messages_.push("bakey");
+                intraMinuteDuplicationProtection = now;
+            }
+            else if (localtime(&tNow)->tm_hour == 11 && localtime(&tNow)->tm_min == 35)
+            {
+                if (WiFi.status() != WL_CONNECTED)
+                {
+                    WiFi.reconnect();
+                };
+
+                if (WiFi.status() == WL_CONNECTED)
+                {
+                    messages_.push("symbl");
+                    messages_.push("price");
+
+                    addStockPriceToMessages("AMZN");
+                    addStockPriceToMessages("VOO");
+                    intraMinuteDuplicationProtection = now;
+                }
+            }
+            else if (localtime(&tNow)->tm_hour == 12 && localtime(&tNow)->tm_min == 0)
+            {
+                messages_.push("it's");
+                messages_.push("lunch");
+                messages_.push("time");
+                intraMinuteDuplicationProtection = now;
+            }
+            else if (localtime(&tNow)->tm_hour == 13 && localtime(&tNow)->tm_min == 0)
+            {
+                messages_.push("back");
+                messages_.push("to");
+                messages_.push("work");
+                intraMinuteDuplicationProtection = now;
+            }
+            else if (localtime(&tNow)->tm_hour == 13 && localtime(&tNow)->tm_min == 55)
+            {
+                messages_.push("test");
+                messages_.push("1");
+                messages_.push("2");
+                intraMinuteDuplicationProtection = now;
+            }
+            else if (localtime(&tNow)->tm_hour == 17 && localtime(&tNow)->tm_min == 0)
+            {
+                messages_.push("nice");
+                messages_.push("work");
+                intraMinuteDuplicationProtection = now;
+            }
+        }
+
+        // Loop through messages if it exists every time we hit the interval
+        if (messages_.size() && now - last_message_change_time_ > MESSAGE_CYCLE_INTERVAL_MILLIS) {
+            String message = messages_.front();
+            messages_.pop();
+
+            snprintf(buf, sizeof(buf), "Cycling to next message: %s", message.c_str());
             logger_.log(buf);
-            
-            splitflap_task_.showString(curTime, NUM_MODULES, false);
-            m_lastSeenTime = curTime;
+
+            // Pad message for display
+            size_t len = strlcpy(buf, message.c_str(), sizeof(buf));
+            memset(buf + len, ' ', sizeof(buf) - len);
+
+            splitflap_task_.showString(buf, NUM_MODULES, false);
+
+            last_message_change_time_ = millis();
+        }
+        else if (now > last_message_change_time_ + MESSAGE_CYCLE_INTERVAL_MILLIS) {
+            char curTime[NUM_MODULES + 3] = {0};
+            strftime(curTime, sizeof(curTime), "t%H%M", localtime(&tNow));
+            logger_.log(buf);
+
+            if (localtime(&tNow)->tm_hour >= 21 || localtime(&tNow)->tm_hour <= 8)
+            {
+                splitflap_task_.showString("night", NUM_MODULES, false);
+            }
+            else if (curTime != m_lastSeenTime.c_str())
+            {
+                snprintf(buf, sizeof(buf), "Cycling to next message: %s", curTime);
+                logger_.log(buf);
+                
+                splitflap_task_.showString(curTime, NUM_MODULES, false);
+                m_lastSeenTime = curTime;
+            }
         }
 
         String wifi_status;

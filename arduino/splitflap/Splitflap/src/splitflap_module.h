@@ -547,6 +547,7 @@ void SplitflapModule::ResetErrorCounters() {
 }
 
 void SplitflapModule::ResetState() {
+    state = LOOK_FOR_HOME;
     ResetErrorCounters();
     CheckSensor();
 
